@@ -1,0 +1,211 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  LambdaFunctionName:
+    Description: The name of the Lambda function that will configure the password policy
+    Type: String
+    Default: UpdateIAMPasswordPolicy
+  EnableRevertOnPolicyChange:
+    Description: Deploy resources to revert password policy if changed outside of CloudFormation (requires an existing CloudTrail Trail for management events)
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  AllowUsersToChangePassword:
+    Description: Allow all IAM users to change their own passwords
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  HardExpiry:
+    Description: Force users to set a new password after it has expired
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  MaxPasswordAge:
+    Description: The maximum number of days that an IAM user password is valid
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 1095
+  MinimumPasswordLength:
+    Description: Minimum number of characters allowed in an IAM user password
+    Type: Number
+    Default: 12
+    MinValue: 6
+    MaxValue: 128
+  PasswordReusePrevention:
+    Description: Prevent IAM users from reusing previous passwords
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 24
+  RequireLowercaseCharacters:
+    Description: Require lowercase characters in IAM user passwords
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  RequireNumbers:
+    Description: Require numerical characters in IAM user passwords
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  RequireSymbols:
+    Description: Require symbols in IAM user passwords
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  RequireUppercaseCharacters:
+    Description: Require uppercase characters in IAM user passwords
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+Conditions:
+  ShouldRevertOnPolicyChange: !Equals [!Ref EnableRevertOnPolicyChange, true]
+
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${LambdaFunctionName}:*
+              - Effect: Allow
+                Action: 'iam:UpdateAccountPasswordPolicy'
+                Resource: '*'
+
+  PasswordPolicyFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties: 
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      FunctionName: !Ref LambdaFunctionName
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          import os
+
+          def lambda_handler(event, context):
+              # Print the event for debug
+              print(f'Event: {json.dumps(event)}')
+
+              client = boto3.client('iam')
+
+              policy_params = {
+                  'AllowUsersToChangePassword': os.environ['AllowUsersToChangePassword'] == 'true',
+                  'HardExpiry': os.environ['HardExpiry'] == 'true',
+                  'MaxPasswordAge': int(os.environ['MaxPasswordAge']),
+                  'MinimumPasswordLength': int(os.environ['MinimumPasswordLength']),
+                  'PasswordReusePrevention': int(os.environ['PasswordReusePrevention']),
+                  'RequireLowercaseCharacters': os.environ['RequireLowercaseCharacters'] == 'true',
+                  'RequireNumbers': os.environ['RequireNumbers'] == 'true',
+                  'RequireSymbols': os.environ['RequireSymbols'] == 'true',
+                  'RequireUppercaseCharacters': os.environ['RequireUppercaseCharacters'] == 'true'
+              }
+
+              # Triggered by EventBridge Rule
+              if 'source' in event:
+                  print('Someone changed the IAM password policy. Reverting it to the defined values from the CloudFormation Stack.')
+                  try:
+                      response = client.update_account_password_policy(**policy_params)
+                      return {
+                          'statusCode': 200,
+                          'body': json.dumps('Password policy updated successfully!')
+                      }
+                  except Exception as e:
+                      return {
+                          'statusCode': 500,
+                          'body': json.dumps('An error occurred: ' + str(e))
+                      }
+
+              # Triggered by CloudFormation
+              elif 'ResourceProperties' in event:
+                  if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      try:
+                          response = client.update_account_password_policy(**policy_params)
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Message': 'Password policy updated successfully!'})
+                      except Exception as e:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+                  # For Delete requests, immediately send a SUCCESS response.
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Message': 'This is a DELETE event'})
+      Environment:
+        Variables:
+          AllowUsersToChangePassword: !Ref AllowUsersToChangePassword
+          HardExpiry: !Ref HardExpiry
+          MaxPasswordAge: !Ref MaxPasswordAge
+          MinimumPasswordLength: !Ref MinimumPasswordLength
+          PasswordReusePrevention: !Ref PasswordReusePrevention
+          RequireLowercaseCharacters: !Ref RequireLowercaseCharacters
+          RequireNumbers: !Ref RequireNumbers
+          RequireSymbols: !Ref RequireSymbols
+          RequireUppercaseCharacters: !Ref RequireUppercaseCharacters
+      Runtime: python3.11
+      Timeout: 10
+
+  PasswordPolicyCustomResource:
+    Type: 'Custom::PasswordPolicy'
+    Properties: 
+      ServiceToken: !GetAtt PasswordPolicyFunction.Arn
+
+  PasswordPolicyEventRule:
+    Type: 'AWS::Events::Rule'
+    Condition: ShouldRevertOnPolicyChange
+    Properties:
+      Description: 'Trigger Lambda on IAM Password Policy change'
+      EventPattern:
+        source:
+          - "aws.iam"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "iam.amazonaws.com"
+          eventName:
+            - "UpdateAccountPasswordPolicy"
+            - "DeleteAccountPasswordPolicy"
+      Targets:
+        - Arn: !GetAtt PasswordPolicyFunction.Arn
+          Id: !Ref LambdaFunctionName
+
+  LambdaInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Condition: ShouldRevertOnPolicyChange
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt PasswordPolicyFunction.Arn
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt PasswordPolicyEventRule.Arn
