@@ -1,15 +1,15 @@
 # AWS IAM Password Policy Manager
 
-This project contains a CloudFormation template that sets up an AWS Lambda function and a custom resource to manage the AWS account password policy. The template allows you to define password policies through CloudFormation stack parameters, making the process of setting and updating password policies automated and easier to manage.
+This project contains a CloudFormation template that sets up an AWS Lambda function, a custom resource, and an optional EventBridge rule to manage the AWS account password policy. The primary function of this tool is to ensure that your desired password policy settings are consistently maintained. Any external modifications or deletions to the password policy are automatically reverted to align with the defined parameters in this CloudFormation stack.
 
 > **Note:** You can also deploy the CloudFormation template as a StackSet, so it'll update the password policy for all/some of the member/linked accounts in the organization.
 
 ## Features
 
 - Configurable IAM account password policy settings via CloudFormation parameters.
+- Centralized logging of password policy changes via CloudWatch.
+- Optional EventBridge rule to monitor and revert any unauthorized changes or deletions to the password policy.
 - Least privilege IAM role for Lambda function.
-- Lambda function to update the IAM account password policy.
-- Centralized logging via CloudWatch.
 
 ## Requirements
 
@@ -29,6 +29,7 @@ The CloudFormation template accepts the following parameters to configure the IA
 - `RequireNumbers`: Require numerical characters in IAM user passwords (Default: true).
 - `RequireSymbols`: Require symbols in IAM user passwords (Default: true).
 - `RequireUppercaseCharacters`: Require uppercase characters in IAM user passwords (Default: true).
+- `EnableRevertOnPolicyChange`: When set to 'true', deploys an EventBridge rule to monitor and revert any unauthorized changes or deletions to the password policy (Default: true).
 
 ## Deployment
 
@@ -69,6 +70,11 @@ The CloudFormation template accepts the following parameters to configure the IA
 
 ## Usage
 
-Once deployed, the IAM account password policy is automatically set based on the parameters specified during stack creation. You can update the policy by updating the stack with new parameter values.
+Once deployed:
 
-If the parameter `EnableRevertOnPolicyChange` is set to `true`, the IAM account password policy will revert to the values defined in the Cloudformation template if it detects a change/delete to the password policy. Note that for this feature to work you must have a "management-events" Cloudtrail Trail configured in the account.
+- The IAM account password policy is automatically set based on the parameters specified during stack creation.
+- If `EnableRevertOnPolicyChange` is set to `true`, an EventBridge rule will monitor any changes or deletions to the password policy. If an unauthorized change or deletion is detected, the Lambda function will automatically revert the policy back to its desired state.
+
+## Support
+
+For support or issues with this template, please raise an issue in the project repository or contact us.
