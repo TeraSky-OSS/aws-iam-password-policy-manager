@@ -75,6 +75,12 @@ Once deployed:
 - The IAM account password policy is automatically set based on the parameters specified during stack creation.
 - If `EnableRevertOnPolicyChange` is set to `true`, an EventBridge rule will monitor any changes or deletions to the password policy. If an unauthorized change or deletion is detected, the Lambda function will automatically revert the policy back to its desired state.
 
+## Note on Password Policy Effect
+
+Upon setting or altering a password policy in AWS, the new policy settings typically take effect **the next time users change their passwords**, rather than retroactively affecting existing passwords. When you change the minimum length and character type requirements, for instance, these updates are enforced the next time users change their passwords. However, users are **not obliged to change their existing passwords** if they don't comply with the updated password policy. The only exception is when you set a **password expiration period**; this setting is enforced immediately. For example, if you set a password expiration period of 90 days, any IAM user whose password is older than 90 days **will be required to change their password** the next time they sign in.
+
+In summary, AWS IAM password policy changes do not retroactively force users to update their passwords unless a password expiration period is set, whereby users with passwords older than the specified period would need to update their passwords upon their next sign-in.
+
 ## Support
 
 For support or issues with this template, please raise an issue in the project repository or contact us.
